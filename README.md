@@ -153,6 +153,79 @@ This is verified by:
 - `benchmarks/benchmark.py` (full 50,000-product run, 30–50 queries per group)
 
 ---
+## Benchmark Results
+### Configuration
+
+| Setting | Value |
+|---|---|
+| Dataset | 50,000 products |
+| Vector dimension | 128 |
+| Seed | 42 |
+| Index partitions | 224 |
+| Metric | Recall@10 |
+| Ground truth | Exact brute-force search |
+
+### Planner Results
+
+| Group          | Filter                            | Selectivity | Planner strategy                | Recall@10 | p50 ms | p95 ms |
+|----------------|-----------------------------------|------------:|---------------------------------|----------:|-------:|-------:|
+| Broad          | No filter                         | 100.0000%   | `exact_scan`                    | 1.000     | 11.4   | 14.6   |
+| Medium         | `zone=Madurai`                    | 12.0620%    | `exact_scan`                    | 1.000     | 3.0    | 3.3    |
+| Medium         | `zone=Chennai`                    | 9.7420%     | `exact_scan`                    | 1.000     | 2.6    | 3.0    |
+| Selective      | `saree+Madurai`                   | 0.9840%     | `partition_then_filter`         | 1.000     | 5.5    | 6.5    |
+| Selective      | `kurta+Chennai`                   | 0.5820%     | `partition_then_filter`         | 1.000     | 5.5    | 6.5    |
+| Very selective | `saree+Ranipet+price<1500`        | 0.0580%    | `filter_aware_partition_search` | 1.000     | 2.9    | 3.3    |
+| Very selective | `silk_saree+Kallakurichi`         | 0.0780%    | `filter_aware_partition_search` | 1.000     | 2.7    | 3.9    |
+| Tiny           | `bridal+Ariyalur+5000-8000`       | 0.0040%    | `filter_aware_partition_search` | 1.000     | 2.4    | 2.5    |
+| Tiny           | `kanjivaram+Perambalur+3000-5000` | 0.0020%    | `filter_aware_partition_search` | 1.000     | 2.9    | 3.4    |
+
+- Recall target: All nine displayed planner queries achieved Recall@10 of 1.000, meeting the target of at least 0.95. The benchmark covers the five required selectivity groups.
+- Broad filters: The planner selected exact_scan for no filter and the two zone filters.
+- Selective filters: It selected partition_then_filter for saree+Madurai and kurta+Chennai.
+- Very selective filters: It selected filter_aware_partition_search for the four queries with selectivity below 0.5%.
+- Latency: The recorded p50 and p95 latencies describe the measured query response times. These values may vary depending on hardware and system load.
+
+### Baseline Comparison
+
+| Query           | Post-filter recall | Pre-filter recall |
+|-----------------|-------------------:|------------------:|
+| No filter       | 0.188              | 0.078             |
+| `zone=Madurai`  | 0.144              | 0.102             |
+| `zone=Chennai`  | 0.098              | 0.124             |
+| `saree+Madurai` | 1.000              | 0.520             |
+| `kurta+Chennai` | 1.000              | 0.724             |
+
+- Low recall: Post-filter and pre-filter show lower recall for several queries than the planner results.
+- Post-filter limitation: The system retrieves an approximate candidate set first and applies metadata filters afterward. Relevant products that were never retrieved cannot be recovered by filtering.
+- Pre-filter limitation: Restricting the candidate set before approximate search can also exclude products that belong in the true filtered top 10.
+- Query-dependent results: The results show that neither baseline performs equally well across all five queries.
+- Comparison: Both baselines should be evaluated against exact brute-force ground truth to determine whether they retrieve the correct top 10 results.
+
+### Mutation Results
+
+| State                      | Product count | Madurai count | Saree + Madurai count | Imbalance |
+|-----------------------------|--------------:|--------------:|----------------------:|----------:|
+| Baseline                    | 50,000        | 6,031         | 492                   | 0.654     |
+| After 10% Madurai deletion  | 49,397        | 5,428         | 437                   | 0.695     |
+| After 5% shifted addition   | 51,866        | 5,428         | 437                   | 0.649     |
+
+- Baseline: The initial dataset contains 50,000 products, including 6,031 products in Madurai and 492 matching both saree and Madurai.
+- After deletion: Removing 10% of Madurai products reduces the dataset to 49,397 products and the Madurai count to 5,428.
+- After shifted addition: The dataset grows to 51,866 products, while the reported Madurai and saree-plus-Madurai counts remain unchanged.
+- Recall: According to your supplied results, Recall@10 remained 1.000 for the displayed queries after rebuilding.
+- Index freshness: A stale index may return deleted products if its entries are not invalidated or rebuilt.
+- Statistics: Deletions can make selectivity estimates inaccurate. Distribution shifts can affect partition assignments and query latency, so index structures and statistics may need rebuilding or updating.
+
+### Reproduction Commands
+
+```powershell
+python -m pytest -q
+python scripts\generate_data.py
+python benchmarks\benchmark.py
+python benchmarks\mutation_test.py
+```
+
+---
 
 ## Known Limitation (Documented Failure)
 
